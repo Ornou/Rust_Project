@@ -76,7 +76,7 @@ cargo run
 ## 🎮 Affichage Terminal
 
 ### Symboles de la Carte
-- `█` - Obstacles (Cyan clair)
+- `O` - Obstacles (Cyan clair)
 - `E` - Ressources Énergie (Vert)
 - `C` - Gisements de Cristaux (Magenta clair)
 - `#` - Base (Vert clair)
@@ -89,19 +89,6 @@ cargo run
 - **Energy** - Total d'énergie collectée
 - **Crystals** - Total de cristaux collectés
 - **Robots** - Compte des éclaireurs (S) et collecteurs (C)
-
-## 📊 Métriques de Performance
-
-Le projet implémente :
-- ✅ Génération de carte avec bruit (10 pts)
-- ✅ Comportements distincts des robots avec pathfinding (20 pts)
-- ✅ Système de base avec stockage (10 pts)
-- ✅ Communication et synchronisation (20 pts)
-- ✅ Architecture concurrente (10 pts)
-- ✅ Intégration Ratatui avec couleurs (8 pts)
-- ✅ Qualité du code (7 pts)
-
-**Total estimé : 85/100 points**
 
 ## 🔄 Flux de Simulation
 
@@ -128,18 +115,3 @@ Le projet implémente :
 - Messages diffusés à chaque découverte
 - Broker traite les messages à chaque tick
 - État global agrégé par la base
-
-## 🎓 Critères de Réussite
-
-✅ Robots naviguent de manière autonome et évitent les obstacles
-✅ Éclaireurs découvrent et partagent les ressources
-✅ Collecteurs rassemblent efficacement et retournent à la base
-✅ Mises à jour en temps réel du progrès
-✅ Rendu terminal propre avec codage couleur
-
----
-
-**Auteur** : Simulation Autonome de Collecte de Ressources
-**Langage** : Rust
-**Interface** : Ratatui (Terminal TUI)
-**Dernière mise à jour** : 16 juin 2026

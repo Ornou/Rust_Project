@@ -358,7 +358,7 @@ RUST_LOG=debug cargo run
 
 | Symbole | Signification | Couleur |
 |---------|---------------|---------|
-| `█` | Obstacle | Cyan clair |
+| `O` | Obstacle | Cyan clair |
 | `E` | Ressource Énergie | Vert |
 | `C` | Gisement Cristaux | Magenta clair |
 | `#` | Base Centrale | Vert clair |
@@ -455,89 +455,6 @@ sim.tick(); // Traite les messages en fin de tick
 
 ---
 
-## 📊 Performance et Grading
-
-### Couverture des Exigences
-
-#### Implémentation de Base (60 points)
-
-| Composant | Points | Status |
-|-----------|--------|--------|
-| Génération de Carte | 10 | ✅ |
-| Comportements Robots | 20 | ✅ |
-| Système de Base | 10 | ✅ |
-| Communication | 20 | ✅ |
-| **Total** | **60** | **✅** |
-
-**Détails :**
-- ✅ Obstacles Perlin noise
-- ✅ Ressources aléatoires (50-200 unités)
-- ✅ Scouts explorent & découvrent
-- ✅ Collectors ciblent & rassemblent
-- ✅ Base stocke & agrège
-- ✅ Messages broadcasts
-- ✅ Synchronisation robuste
-
-#### Qualité Technique (25 points)
-
-| Aspect | Points | Status |
-|--------|--------|--------|
-| Architecture Concurrente | 10 | ✅ |
-| Intégration Ratatui | 8 | ✅ |
-| Qualité du Code | 7 | ✅ |
-| **Total** | **25** | **✅** |
-
-**Détails :**
-- ✅ Robots indépendants Arc<Mutex<>>
-- ✅ Non-bloquant
-- ✅ Rendu temps réel
-- ✅ Couleurs appropriées
-- ✅ Code structuré modulaire
-- ✅ Gestion d'erreurs
-- ✅ Documentation inline
-
-#### Fonctionnalités Avancées (15 points)
-
-| Feature | Points | Status |
-|---------|--------|--------|
-| Optimisation | 5 | ✅ |
-| Robustesse | 5 | ✅ |
-| UX | 5 | ✅ |
-| **Total** | **15** | **✅** |
-
-**Détails :**
-- ✅ Pathfinding O(1)
-- ✅ Gestion ressources limitées
-- ✅ Équilibrage tâches
-- ✅ Pas de crash/panic
-- ✅ Edge cases gérés
-- ✅ Simulation fluide
-- ✅ Affichage clair
-- ✅ Stats en temps réel
-
-### Score Estimé : **100/100 points** ✨
-
----
-
-## 🚀 Optimisations et Améliorations Futures
-
-### Implémentées
-- ✅ Communication asynchrone
-- ✅ Arc<Mutex<>> pour concurrence
-- ✅ Perlin noise procédural
-- ✅ Interface Ratatui temps réel
-
-### Possibles
-- 🔮 Algorithme A* pour pathfinding
-- 🔮 Évitement collision entre robots
-- 🔮 Hiérarchie de tâches
-- 🔮 Système d'énergie pour robots
-- 🔮 Ressources qui se regénèrent
-- 🔮 Multiples bases
-- 🔮 Mode sauvegarde/replay
-
----
-
 ## 📚 Dépendances
 
 ```toml
@@ -552,37 +469,6 @@ serde = "1.0"                 # Serialization
 log = "0.4"                   # Logging
 ```
 
----
-
-## 📖 Résumé Technique
-
-**Langage :** Rust 2021 Edition
-**Paradigme :** Concurrent, Asynchrone, Event-Driven
-**Architecture :** Modular, Component-based
-**Interface :** TUI (Terminal User Interface)
-**Rendering :** Ratatui framework
-**Events :** Crossterm
-**Concurrence :** Arc<Mutex<>> pattern
-
----
-
-## ✅ Checklist d'Implémentation
-
-- ✅ Génération de carte avec Perlin noise
-- ✅ 2 types de robots avec comportements distincts
-- ✅ Scouts explorent aléatoirement
-- ✅ Collectors ciblent & rassemblent
-- ✅ Base centrale avec stockage
-- ✅ Communication asynchrone via MessageBroker
-- ✅ Architecture concurrente non-bloquante
-- ✅ Interface Ratatui avec couleurs
-- ✅ Statistiques en temps réel
-- ✅ Gestion d'événements (quit)
-- ✅ Code modulaire & documenté
-- ✅ Compilation sans erreurs
-- ✅ Exécution fluide
-
----
 
 ## 🎓 Conclusion
 
@@ -594,9 +480,3 @@ Ce projet démontre une compréhension complète de :
 - **Concurrence** : Non-bloquant, Thread-safe
 
 Le code est **production-ready** et peut être étendu pour des scénarios plus complexes.
-
----
-
-**Auteur :** Simulation Autonome
-**Date :** 16 Juin 2026
-**Statut :** ✅ Complété & Testé
