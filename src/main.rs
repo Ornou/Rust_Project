@@ -4,19 +4,21 @@ mod map;
 mod robot;
 mod simulation;
 
-use map::{CellType, Position};
-use ratatui::backend::CrosstermBackend;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::ExecutableCommand;
+use map::{CellType, Position};
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, Terminal};
 use robot::RobotType;
-use simulation::Simulation;
+use simulation::{RenderSnapshot, Simulation};
+use std::collections::HashMap;
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -31,17 +33,17 @@ fn main() -> io::Result<()> {
     let tick_rate = Duration::from_millis(100);
 
     loop {
-        terminal.draw(|f| ui(f, &sim))?;
+        let snapshot = sim.get_snapshot();
+        terminal.draw(|f| ui(f, &snapshot))?;
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
+            .unwrap_or_default();
 
         if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
-                    break;
-                }
+            // Any key press exits
+            if let Event::Key(_) = event::read()? {
+                break;
             }
         }
 
@@ -51,119 +53,124 @@ fn main() -> io::Result<()> {
         }
     }
 
+    sim.stop();
     restore_terminal()?;
     Ok(())
 }
 
-fn ui(f: &mut Frame, sim: &Simulation) {
-    let main_chunks = ratatui::layout::Layout::default()
-        .direction(ratatui::layout::Direction::Vertical)
+fn ui(f: &mut Frame, snap: &RenderSnapshot) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
         .margin(1)
-        .constraints([
-            ratatui::layout::Constraint::Min(25),
-            ratatui::layout::Constraint::Length(4),
-        ])
+        .constraints([Constraint::Min(20), Constraint::Length(5)])
         .split(f.size());
 
-    let map_area = main_chunks[0];
-    let stats_area = main_chunks[1];
-
-    // Draw map
-    draw_map(f, sim, map_area);
-
-    // Draw stats
-    draw_stats(f, sim, stats_area);
+    draw_map(f, snap, chunks[0]);
+    draw_stats(f, snap, chunks[1]);
 }
 
-fn draw_map(f: &mut Frame, sim: &Simulation, area: ratatui::layout::Rect) {
-    let mut map_content = String::new();
-    let robot_positions: std::collections::HashMap<_, _> = sim
-        .get_robot_positions()
+fn draw_map(f: &mut Frame, snap: &RenderSnapshot, area: Rect) {
+    // Build a Position → RobotType lookup for O(1) access
+    let robot_map: HashMap<Position, RobotType> = snap
+        .robot_positions
         .iter()
-        .map(|(id, pos, rtype)| (pos.clone(), (*id, *rtype)))
+        .map(|(_, pos, rt)| (*pos, *rt))
         .collect();
 
-    for y in 0..sim.map.height {
-        for x in 0..sim.map.width {
-            let pos = Position::new(x, y);
+    let mut lines: Vec<Line> = Vec::new();
 
-            if pos == sim.map.base_position {
-                map_content.push('#');
-            } else if let Some((_, rtype)) = robot_positions.get(&pos) {
-                let c = match rtype {
-                    RobotType::Scout => 'x',
-                    RobotType::Collector => 'o',
-                };
-                map_content.push(c);
-            } else {
-                let cell = sim.map.get_cell(pos);
-                match cell {
-                    CellType::Obstacle => map_content.push('█'),
-                    CellType::Energy => map_content.push('E'),
-                    CellType::Crystal => map_content.push('C'),
-                    CellType::Empty => map_content.push('·'),
+    for y in 0..snap.map.height {
+        let mut spans: Vec<Span> = Vec::new();
+        for x in 0..snap.map.width {
+            let pos = Position::new(x, y);
+            let (ch, style) = if pos == snap.map.base_position {
+                ('#', Style::default().fg(Color::LightGreen))
+            } else if let Some(rt) = robot_map.get(&pos) {
+                match rt {
+                    RobotType::Scout => ('x', Style::default().fg(Color::Red)),
+                    RobotType::Collector => ('o', Style::default().fg(Color::Magenta)),
                 }
-            }
+            } else {
+                match snap.map.get_cell(pos) {
+                    CellType::Obstacle => ('O', Style::default().fg(Color::LightCyan)),
+                    CellType::Energy => ('E', Style::default().fg(Color::Green)),
+                    CellType::Crystal => ('C', Style::default().fg(Color::LightMagenta)),
+                    CellType::Empty => ('·', Style::default().fg(Color::DarkGray)),
+                }
+            };
+            spans.push(Span::styled(ch.to_string(), style));
         }
-        if y < sim.map.height - 1 {
-            map_content.push('\n');
-        }
+        lines.push(Line::from(spans));
     }
 
-    let map_paragraph = Paragraph::new(map_content)
-        .block(Block::default().title("Map").borders(Borders::ALL))
-        .style(
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::Black),
-        );
-
-    f.render_widget(map_paragraph, area);
+    let map_widget = Paragraph::new(lines)
+        .block(Block::default().title(" Map ").borders(Borders::ALL));
+    f.render_widget(map_widget, area);
 }
 
-fn draw_stats(f: &mut Frame, sim: &Simulation, area: ratatui::layout::Rect) {
-    let energy = sim.base.get_total_energy();
-    let crystals = sim.base.get_total_crystals();
+fn draw_stats(f: &mut Frame, snap: &RenderSnapshot, area: Rect) {
+    let num_scouts = snap
+        .robot_positions
+        .iter()
+        .filter(|(_, _, rt)| *rt == RobotType::Scout)
+        .count();
+    let num_collectors = snap
+        .robot_positions
+        .iter()
+        .filter(|(_, _, rt)| *rt == RobotType::Collector)
+        .count();
 
-    let stats_text = vec![
+    let text = vec![
         Line::from(vec![
             Span::raw("Turn: "),
             Span::styled(
-                sim.turn.to_string(),
+                snap.turn.to_string(),
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ),
             Span::raw("  |  Energy: "),
             Span::styled(
-                energy.to_string(),
+                snap.energy.to_string(),
                 Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
             ),
             Span::raw("  |  Crystals: "),
             Span::styled(
-                crystals.to_string(),
+                snap.crystals.to_string(),
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(Color::LightMagenta)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::raw("Robots: "),
             Span::styled(
-                format!("{}S", sim.robots.iter().filter(|r| r.lock().robot_type == RobotType::Scout).count()),
+                format!("{}x Scouts", num_scouts),
                 Style::default().fg(Color::Red),
             ),
-            Span::raw(" / "),
+            Span::raw("  |  "),
             Span::styled(
-                format!("{}C", sim.robots.iter().filter(|r| r.lock().robot_type == RobotType::Collector).count()),
+                format!("{}o Collectors", num_collectors),
                 Style::default().fg(Color::Magenta),
             ),
         ]),
-        Line::from(Span::raw("Press 'q' or ESC to quit")),
+        Line::from(vec![
+            Span::styled("# ", Style::default().fg(Color::LightGreen)),
+            Span::raw("Base  "),
+            Span::styled("x ", Style::default().fg(Color::Red)),
+            Span::raw("Scout  "),
+            Span::styled("o ", Style::default().fg(Color::Magenta)),
+            Span::raw("Collector  "),
+            Span::styled("O ", Style::default().fg(Color::LightCyan)),
+            Span::raw("Obstacle  "),
+            Span::styled("E ", Style::default().fg(Color::Green)),
+            Span::raw("Energy  "),
+            Span::styled("C ", Style::default().fg(Color::LightMagenta)),
+            Span::raw("Crystal"),
+        ]),
+        Line::from(Span::raw("Press any key to quit")),
     ];
 
-    let stats_paragraph = Paragraph::new(stats_text)
-        .block(Block::default().title("Statistics").borders(Borders::ALL));
-
-    f.render_widget(stats_paragraph, area);
+    let stats = Paragraph::new(text)
+        .block(Block::default().title(" Statistics ").borders(Borders::ALL));
+    f.render_widget(stats, area);
 }
 
 fn setup_terminal() -> io::Result<()> {
