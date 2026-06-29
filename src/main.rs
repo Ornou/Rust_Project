@@ -4,7 +4,7 @@ mod map;
 mod robot;
 mod simulation;
 
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -14,21 +14,35 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use robot::RobotType;
 use simulation::{RenderSnapshot, Simulation};
 use std::collections::HashMap;
 use std::io;
 use std::time::{Duration, Instant};
+use tracing::info;
+use tracing_subscriber::FmtSubscriber;
 
 fn main() -> io::Result<()> {
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
+        .with_writer(std::io::stderr)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default tracing subscriber failed");
+
+    let seed = std::env::var("SIM_SEED")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok());
+    info!(seed = seed.unwrap_or(0), "Starting simulation");
+
     setup_terminal()?;
 
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
 
-    let mut sim = Simulation::new(80, 30, 3, 5);
+    let mut sim = Simulation::new(80, 30, 3, 5, seed);
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(100);
 
@@ -42,8 +56,10 @@ fn main() -> io::Result<()> {
 
         if crossterm::event::poll(timeout)? {
             // Any key press exits
-            if let Event::Key(_) = event::read()? {
-                break;
+            if let Event::Key(key) = event::read()? {
+                if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                    break;
+                }
             }
         }
 
@@ -62,7 +78,7 @@ fn ui(f: &mut Frame, snap: &RenderSnapshot) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Min(20), Constraint::Length(5)])
+        .constraints([Constraint::Min(0), Constraint::Length(5)])
         .split(f.size());
 
     draw_map(f, snap, chunks[0]);
@@ -104,7 +120,8 @@ fn draw_map(f: &mut Frame, snap: &RenderSnapshot, area: Rect) {
     }
 
     let map_widget = Paragraph::new(lines)
-        .block(Block::default().title(" Map ").borders(Borders::ALL));
+        .block(Block::default().title(" Map ").borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
     f.render_widget(map_widget, area);
 }
 
@@ -125,12 +142,16 @@ fn draw_stats(f: &mut Frame, snap: &RenderSnapshot, area: Rect) {
             Span::raw("Turn: "),
             Span::styled(
                 snap.turn.to_string(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  |  Energy: "),
             Span::styled(
                 snap.energy.to_string(),
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  |  Crystals: "),
             Span::styled(
@@ -168,8 +189,8 @@ fn draw_stats(f: &mut Frame, snap: &RenderSnapshot, area: Rect) {
         Line::from(Span::raw("Press any key to quit")),
     ];
 
-    let stats = Paragraph::new(text)
-        .block(Block::default().title(" Statistics ").borders(Borders::ALL));
+    let stats =
+        Paragraph::new(text).block(Block::default().title(" Statistics ").borders(Borders::ALL));
     f.render_widget(stats, area);
 }
 

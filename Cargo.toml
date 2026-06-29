@@ -6,10 +6,9 @@ edition = "2021"
 [dependencies]
 ratatui = "0.26"
 crossterm = { version = "0.27", features = ["events"] }
-tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 rand = "0.8"
+rand_chacha = "0.3"
 noise = "0.9"
-serde = { version = "1.0", features = ["derive"] }
-log = "0.4"
-env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

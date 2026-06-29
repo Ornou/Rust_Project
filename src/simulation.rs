@@ -3,7 +3,8 @@ use crate::communication::Message;
 use crate::map::{bfs_next_step, CellType, Map, Position, ResourceType};
 use crate::robot::{Robot, RobotType};
 use parking_lot::Mutex;
-use rand::Rng;
+use rand::{Rng, RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -31,8 +32,16 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    pub fn new(width: usize, height: usize, num_scouts: u32, num_collectors: u32) -> Self {
-        let map_data = Map::generate(width, height);
+    pub fn new(
+        width: usize,
+        height: usize,
+        num_scouts: u32,
+        num_collectors: u32,
+        seed: Option<u64>,
+    ) -> Self {
+        let seed_value = seed.unwrap_or(0);
+        let mut rng = ChaCha8Rng::seed_from_u64(seed_value);
+        let map_data = Map::generate(width, height, &mut rng);
         let base_position = map_data.base_position;
         let map = Arc::new(Mutex::new(map_data));
         let base = Arc::new(Base::new());
@@ -41,18 +50,33 @@ impl Simulation {
         let (tx, rx) = mpsc::channel::<Message>();
         let running = Arc::new(AtomicBool::new(true));
 
-        let mut robots: Vec<Arc<Mutex<Robot>>> = Vec::new();
+        tracing::info!(
+            seed = seed_value,
+            width,
+            height,
+            num_scouts,
+            num_collectors,
+            "Simulation created"
+        );
+
+        let mut robots: Vec<Arc<Mutex<Robot>>> =
+            Vec::with_capacity((num_scouts + num_collectors) as usize);
 
         for i in 0..num_scouts {
-            let robot = Arc::new(Mutex::new(Robot::new_scout(i, base_position, base_position)));
+            let robot = Arc::new(Mutex::new(Robot::new_scout(
+                i,
+                base_position,
+                base_position,
+            )));
             robots.push(robot.clone());
 
             let map_c = map.clone();
             let tx_c = tx.clone();
             let running_c = running.clone();
             let robot_c = robot.clone();
+            let thread_seed = rng.next_u64();
 
-            thread::spawn(move || run_scout(robot_c, map_c, tx_c, running_c));
+            thread::spawn(move || run_scout(robot_c, map_c, tx_c, running_c, thread_seed));
         }
 
         for i in 0..num_collectors {
@@ -69,9 +93,18 @@ impl Simulation {
             let robot_c = robot.clone();
             let shared_res_c = shared_resources.clone();
             let base_c = base.clone();
+            let thread_seed = rng.next_u64();
 
             thread::spawn(move || {
-                run_collector(robot_c, map_c, tx_c, running_c, shared_res_c, base_c)
+                run_collector(
+                    robot_c,
+                    map_c,
+                    tx_c,
+                    running_c,
+                    shared_res_c,
+                    base_c,
+                    thread_seed,
+                )
             });
         }
 
@@ -90,40 +123,79 @@ impl Simulation {
     pub fn tick(&mut self) {
         self.turn += 1;
         while let Ok(msg) = self.rx.try_recv() {
-            match &msg {
-                Message::ResourceDiscovered {
-                    position,
-                    resource_type,
+            self.handle_message(msg);
+        }
+    }
+
+    fn handle_message(&mut self, msg: Message) {
+        let robot_id = msg.robot_id();
+        match msg {
+            Message::ResourceDiscovered {
+                position,
+                resource_type,
+                quantity,
+                ..
+            } => {
+                tracing::debug!(
+                    robot_id,
+                    ?position,
+                    ?resource_type,
                     quantity,
-                    ..
-                } => {
-                    self.shared_resources
-                        .lock()
-                        .insert(*position, (*resource_type, *quantity));
-                }
-                Message::ResourceCollected {
-                    position, quantity, ..
-                } => {
-                    let mut res = self.shared_resources.lock();
-                    // Use a flag to avoid holding the mutable borrow while calling remove
-                    let should_remove = if let Some(entry) = res.get_mut(position) {
-                        if entry.1 <= *quantity {
-                            true
-                        } else {
-                            entry.1 -= quantity;
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    if should_remove {
-                        res.remove(position);
-                    }
-                }
-                // Deposits are applied directly by the collector thread
-                Message::ResourceDepositedAtBase { .. } => {}
-                // Obstacle info is embedded in map, shared_resources is enough
-                Message::ObstacleDiscovered { .. } => {}
+                    "resource discovered"
+                );
+                self.handle_resource_discovered(position, resource_type, quantity)
+            }
+            Message::ResourceCollected {
+                position,
+                resource_type,
+                quantity,
+                ..
+            } => {
+                tracing::debug!(
+                    robot_id,
+                    ?position,
+                    ?resource_type,
+                    quantity,
+                    "resource collected"
+                );
+                self.handle_resource_collected(position, quantity)
+            }
+            Message::ResourceDepositedAtBase {
+                resource_type,
+                quantity,
+                ..
+            } => {
+                tracing::debug!(
+                    robot_id,
+                    ?resource_type,
+                    quantity,
+                    "resource deposited at base"
+                );
+            }
+            Message::ObstacleDiscovered { position, .. } => {
+                tracing::debug!(robot_id, ?position, "obstacle discovered");
+            }
+        }
+    }
+
+    fn handle_resource_discovered(
+        &self,
+        position: Position,
+        resource_type: ResourceType,
+        quantity: u32,
+    ) {
+        self.shared_resources
+            .lock()
+            .insert(position, (resource_type, quantity));
+    }
+
+    fn handle_resource_collected(&self, position: Position, quantity: u32) {
+        let mut resources = self.shared_resources.lock();
+        if let Some(entry) = resources.get_mut(&position) {
+            if entry.1 <= quantity {
+                resources.remove(&position);
+            } else {
+                entry.1 -= quantity;
             }
         }
     }
@@ -161,8 +233,9 @@ fn run_scout(
     map: Arc<Mutex<Map>>,
     tx: mpsc::Sender<Message>,
     running: Arc<AtomicBool>,
+    seed: u64,
 ) {
-    let mut rng = rand::thread_rng();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
     while running.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(100));
@@ -172,25 +245,18 @@ fn run_scout(
             (r.position, r.id)
         };
 
-        let (walkable, obstacles, resource_at): (Vec<Position>, Vec<Position>, Option<(Position, ResourceType, u32)>) = {
+        let (walkable, obstacles, resource_at) = {
             let m = map.lock();
-            let all = pos.neighbors_cardinal(m.width, m.height);
-            let walkable: Vec<_> = all.iter().copied().filter(|&p| m.get_cell(p) != CellType::Obstacle).collect();
-            let obstacles: Vec<_> = all.iter().copied().filter(|&p| m.get_cell(p) == CellType::Obstacle).collect();
-
-            // Also scan current position for a resource (for first arrival)
-            let resource_at = m.resources.get(&pos)
-                .filter(|r| r.quantity > 0)
-                .map(|r| (pos, r.resource_type, r.quantity));
-            (walkable, obstacles, resource_at)
+            scan_surroundings(&m, pos)
         };
 
-        // Broadcast obstacles seen around current position
         for obs_pos in obstacles {
-            let _ = tx.send(Message::ObstacleDiscovered { robot_id: id, position: obs_pos });
+            let _ = tx.send(Message::ObstacleDiscovered {
+                robot_id: id,
+                position: obs_pos,
+            });
         }
 
-        // Broadcast resource at current position (if any)
         if let Some((rpos, rt, qty)) = resource_at {
             let _ = tx.send(Message::ResourceDiscovered {
                 robot_id: id,
@@ -200,24 +266,8 @@ fn run_scout(
             });
         }
 
-        // Move to a random walkable neighbor
-        if !walkable.is_empty() {
-            let next_pos = walkable[rng.gen_range(0..walkable.len())];
-
-            // Discover resource at next position before moving
-            let next_resource = {
-                let m = map.lock();
-                match m.get_cell(next_pos) {
-                    CellType::Energy | CellType::Crystal => m
-                        .resources
-                        .get(&next_pos)
-                        .filter(|r| r.quantity > 0)
-                        .map(|r| (r.resource_type, r.quantity)),
-                    _ => None,
-                }
-            };
-
-            if let Some((rt, qty)) = next_resource {
+        if let Some(next_pos) = choose_random_neighbor(&mut rng, &walkable) {
+            if let Some((rt, qty)) = scan_resource_at(&map, next_pos) {
                 let _ = tx.send(Message::ResourceDiscovered {
                     robot_id: id,
                     position: next_pos,
@@ -225,9 +275,54 @@ fn run_scout(
                     quantity: qty,
                 });
             }
-
             robot.lock().position = next_pos;
         }
+    }
+}
+
+fn scan_surroundings(
+    map: &Map,
+    pos: Position,
+) -> (
+    Vec<Position>,
+    Vec<Position>,
+    Option<(Position, ResourceType, u32)>,
+) {
+    let all = pos.neighbors_cardinal(map.width, map.height);
+    let walkable = all
+        .iter()
+        .copied()
+        .filter(|&p| map.get_cell(p) != CellType::Obstacle)
+        .collect();
+    let obstacles = all
+        .iter()
+        .copied()
+        .filter(|&p| map.get_cell(p) == CellType::Obstacle)
+        .collect();
+    let resource_at = map
+        .resources
+        .get(&pos)
+        .and_then(|r| (r.quantity > 0).then_some((pos, r.resource_type, r.quantity)));
+    (walkable, obstacles, resource_at)
+}
+
+fn choose_random_neighbor(rng: &mut ChaCha8Rng, walkable: &[Position]) -> Option<Position> {
+    if walkable.is_empty() {
+        None
+    } else {
+        Some(walkable[rng.gen_range(0..walkable.len())])
+    }
+}
+
+fn scan_resource_at(map: &Arc<Mutex<Map>>, pos: Position) -> Option<(ResourceType, u32)> {
+    let m = map.lock();
+    match m.get_cell(pos) {
+        CellType::Energy | CellType::Crystal => m
+            .resources
+            .get(&pos)
+            .filter(|r| r.quantity > 0)
+            .map(|r| (r.resource_type, r.quantity)),
+        _ => None,
     }
 }
 
@@ -241,115 +336,184 @@ fn run_collector(
     running: Arc<AtomicBool>,
     shared_resources: Arc<Mutex<HashMap<Position, (ResourceType, u32)>>>,
     base: Arc<Base>,
+    seed: u64,
 ) {
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
     while running.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(100));
 
         let (pos, id, inventory, carrying_type, target, base_pos) = {
             let r = robot.lock();
-            (r.position, r.id, r.inventory, r.carrying_type, r.target, r.base_position)
+            (
+                r.position,
+                r.id,
+                r.inventory,
+                r.carrying_type,
+                r.target,
+                r.base_position,
+            )
         };
 
         if inventory > 0 {
-            // --- Phase: return to base ---
-            if pos == base_pos {
-                let ct = carrying_type.unwrap_or(ResourceType::Energy);
-                base.deposit_resource(ct, inventory);
-                let _ = tx.send(Message::ResourceDepositedAtBase {
+            handle_return_to_base(
+                &robot,
+                &map,
+                base.clone(),
+                tx.clone(),
+                id,
+                carrying_type,
+                inventory,
+                pos,
+                base_pos,
+            );
+            continue;
+        }
+
+        let tgt_pos = choose_target(pos, target, &shared_resources, &mut rng);
+        if let Some(tgt_pos) = tgt_pos {
+            handle_collector_target(&robot, &map, &shared_resources, &tx, id, pos, tgt_pos);
+        } else {
+            robot.lock().target = None;
+        }
+    }
+}
+
+fn choose_target(
+    pos: Position,
+    current_target: Option<Position>,
+    shared_resources: &Arc<Mutex<HashMap<Position, (ResourceType, u32)>>>,
+    rng: &mut ChaCha8Rng,
+) -> Option<Position> {
+    current_target.or_else(|| {
+        shared_resources
+            .lock()
+            .iter()
+            .min_by(|(a, _), (b, _)| {
+                let a_dist = (a.x as i32 - pos.x as i32).abs() + (a.y as i32 - pos.y as i32).abs();
+                let b_dist = (b.x as i32 - pos.x as i32).abs() + (b.y as i32 - pos.y as i32).abs();
+                a_dist.cmp(&b_dist).then_with(|| {
+                    if rng.gen_bool(0.5) {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    }
+                })
+            })
+            .map(|(p, _)| *p)
+    })
+}
+
+fn handle_return_to_base(
+    robot: &Arc<Mutex<Robot>>,
+    map: &Arc<Mutex<Map>>,
+    base: Arc<Base>,
+    tx: mpsc::Sender<Message>,
+    id: u32,
+    carrying_type: Option<ResourceType>,
+    inventory: u32,
+    pos: Position,
+    base_pos: Position,
+) {
+    if pos != base_pos {
+        let next = {
+            let m = map.lock();
+            bfs_next_step(&m, pos, base_pos)
+        };
+        if let Some(next_pos) = next {
+            robot.lock().position = next_pos;
+        }
+        return;
+    }
+
+    let ct = carrying_type.unwrap_or(ResourceType::Energy);
+    base.deposit_resource(ct, inventory);
+    let _ = tx.send(Message::ResourceDepositedAtBase {
+        robot_id: id,
+        resource_type: ct,
+        quantity: inventory,
+    });
+    let mut r = robot.lock();
+    r.inventory = 0;
+    r.carrying_type = None;
+    r.returning_to_base = false;
+    r.target = None;
+}
+
+fn handle_collector_target(
+    robot: &Arc<Mutex<Robot>>,
+    map: &Arc<Mutex<Map>>,
+    shared_resources: &Arc<Mutex<HashMap<Position, (ResourceType, u32)>>>,
+    tx: &mpsc::Sender<Message>,
+    id: u32,
+    pos: Position,
+    tgt_pos: Position,
+) {
+    if pos == tgt_pos {
+        match try_collect_resource(map, shared_resources, tgt_pos) {
+            Some(rt) => {
+                let _ = tx.send(Message::ResourceCollected {
                     robot_id: id,
-                    resource_type: ct,
-                    quantity: inventory,
+                    position: tgt_pos,
+                    resource_type: rt,
+                    quantity: 1,
                 });
                 let mut r = robot.lock();
-                r.inventory = 0;
-                r.carrying_type = None;
-                r.returning_to_base = false;
-                r.target = None;
-            } else {
-                let next = { let m = map.lock(); bfs_next_step(&m, pos, base_pos) };
-                if let Some(next_pos) = next {
-                    robot.lock().position = next_pos;
-                }
+                r.inventory = 1;
+                r.carrying_type = Some(rt);
+                r.returning_to_base = true;
+                r.target = Some(tgt_pos);
             }
-        } else {
-            // --- Phase: find and collect a resource ---
-            let tgt = target.or_else(|| {
-                // Pick the nearest known resource by Manhattan distance
-                shared_resources
-                    .lock()
-                    .keys()
-                    .min_by_key(|p| {
-                        (p.x as i32 - pos.x as i32).abs() + (p.y as i32 - pos.y as i32).abs()
-                    })
-                    .copied()
-            });
-
-            match tgt {
-                None => {
-                    // No known resources yet — idle
-                    robot.lock().target = None;
-                }
-                Some(tgt_pos) => {
-                    if pos == tgt_pos {
-                        // Try to collect one unit from the map
-                        let (rt_opt, should_remove) = {
-                            let mut m = map.lock();
-                            let result = if let Some(res) = m.resources.get_mut(&tgt_pos) {
-                                if res.quantity > 0 {
-                                    let rt = res.resource_type;
-                                    res.quantity -= 1;
-                                    let depleted = res.quantity == 0;
-                                    (Some(rt), depleted)
-                                } else {
-                                    (None, true)
-                                }
-                            } else {
-                                (None, false)
-                            };
-                            result
-                        };
-
-                        // Clean up map if resource exhausted (separate lock to avoid borrow issue)
-                        if should_remove {
-                            let mut m = map.lock();
-                            m.resources.remove(&tgt_pos);
-                            m.cells[tgt_pos.y][tgt_pos.x] = CellType::Empty;
-                            // Remove from shared knowledge too
-                            shared_resources.lock().remove(&tgt_pos);
-                        }
-
-                        if let Some(rt) = rt_opt {
-                            let _ = tx.send(Message::ResourceCollected {
-                                robot_id: id,
-                                position: tgt_pos,
-                                resource_type: rt,
-                                quantity: 1,
-                            });
-                            let mut r = robot.lock();
-                            r.inventory = 1;
-                            r.carrying_type = Some(rt);
-                            r.returning_to_base = true;
-                            r.target = Some(tgt_pos);
-                        } else {
-                            // Resource was already gone
-                            shared_resources.lock().remove(&tgt_pos);
-                            robot.lock().target = None;
-                        }
-                    } else {
-                        // Move toward target using BFS (obstacle-aware)
-                        let next = { let m = map.lock(); bfs_next_step(&m, pos, tgt_pos) };
-                        if let Some(next_pos) = next {
-                            let mut r = robot.lock();
-                            r.position = next_pos;
-                            r.target = Some(tgt_pos);
-                        } else {
-                            // Target unreachable — abandon it
-                            shared_resources.lock().remove(&tgt_pos);
-                            robot.lock().target = None;
-                        }
-                    }
-                }
+            None => {
+                shared_resources.lock().remove(&tgt_pos);
+                robot.lock().target = None;
             }
         }
+    } else {
+        let next = {
+            let m = map.lock();
+            bfs_next_step(&m, pos, tgt_pos)
+        };
+        if let Some(next_pos) = next {
+            let mut r = robot.lock();
+            r.position = next_pos;
+            r.target = Some(tgt_pos);
+        } else {
+            shared_resources.lock().remove(&tgt_pos);
+            robot.lock().target = None;
+        }
+    }
+}
+
+fn try_collect_resource(
+    map: &Arc<Mutex<Map>>,
+    shared_resources: &Arc<Mutex<HashMap<Position, (ResourceType, u32)>>>,
+    tgt_pos: Position,
+) -> Option<ResourceType> {
+    let mut m = map.lock();
+    if let Some(res) = m.resources.get_mut(&tgt_pos) {
+        if res.quantity == 0 {
+            shared_resources.lock().remove(&tgt_pos);
+            return None;
+        }
+
+        res.quantity -= 1;
+        let resource_type = res.resource_type;
+
+        if res.quantity == 0 {
+            m.resources.remove(&tgt_pos);
+            m.cells[tgt_pos.y][tgt_pos.x] = CellType::Empty;
+            shared_resources.lock().remove(&tgt_pos);
+        } else {
+            shared_resources
+                .lock()
+                .entry(tgt_pos)
+                .and_modify(|entry| entry.1 = res.quantity);
+        }
+
+        Some(resource_type)
+    } else {
+        shared_resources.lock().remove(&tgt_pos);
+        None
     }
 }

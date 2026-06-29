@@ -1,37 +1,43 @@
 use crate::map::ResourceType;
 use parking_lot::Mutex;
-use std::sync::Arc;
+
+struct BaseState {
+    energy: u32,
+    crystals: u32,
+}
 
 pub struct Base {
-    pub energy: Arc<Mutex<u32>>,
-    pub crystals: Arc<Mutex<u32>>,
+    state: Mutex<BaseState>,
 }
 
 impl Base {
     pub fn new() -> Self {
         Base {
-            energy: Arc::new(Mutex::new(0)),
-            crystals: Arc::new(Mutex::new(0)),
+            state: Mutex::new(BaseState {
+                energy: 0,
+                crystals: 0,
+            }),
         }
     }
 
     pub fn deposit_resource(&self, resource_type: ResourceType, quantity: u32) {
+        let mut inner = self.state.lock();
         match resource_type {
             ResourceType::Energy => {
-                *self.energy.lock() += quantity;
+                inner.energy += quantity;
             }
             ResourceType::Crystal => {
-                *self.crystals.lock() += quantity;
+                inner.crystals += quantity;
             }
         }
     }
 
     pub fn get_total_energy(&self) -> u32 {
-        *self.energy.lock()
+        self.state.lock().energy
     }
 
     pub fn get_total_crystals(&self) -> u32 {
-        *self.crystals.lock()
+        self.state.lock().crystals
     }
 }
 

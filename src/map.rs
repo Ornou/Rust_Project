@@ -13,12 +13,6 @@ impl Position {
         Position { x, y }
     }
 
-    pub fn distance_to(&self, other: &Position) -> f64 {
-        let dx = (self.x as i32 - other.x as i32) as f64;
-        let dy = (self.y as i32 - other.y as i32) as f64;
-        (dx * dx + dy * dy).sqrt()
-    }
-
     pub fn neighbors_cardinal(&self, width: usize, height: usize) -> Vec<Position> {
         let dirs: &[(i32, i32)] = &[(0, -1), (0, 1), (-1, 0), (1, 0)];
         let mut out = Vec::new();
@@ -63,8 +57,7 @@ pub struct Map {
 }
 
 impl Map {
-    pub fn generate(width: usize, height: usize) -> Self {
-        let mut rng = rand::thread_rng();
+    pub fn generate<R: Rng + ?Sized>(width: usize, height: usize, rng: &mut R) -> Self {
         let perlin = Perlin::new(rng.gen());
 
         let mut cells = vec![vec![CellType::Empty; width]; height];
@@ -104,8 +97,8 @@ impl Map {
                 }
                 let x = rng.gen_range(0..width);
                 let y = rng.gen_range(0..height);
-                let is_near_base = (x as i32 - base_x as i32).abs() <= 3
-                    && (y as i32 - base_y as i32).abs() <= 3;
+                let is_near_base =
+                    (x as i32 - base_x as i32).abs() <= 3 && (y as i32 - base_y as i32).abs() <= 3;
                 if cells[y][x] == CellType::Empty && !is_near_base {
                     let resource_type = if rng.gen_bool(0.5) {
                         ResourceType::Energy
@@ -117,7 +110,13 @@ impl Map {
                         ResourceType::Energy => CellType::Energy,
                         ResourceType::Crystal => CellType::Crystal,
                     };
-                    resources.insert(Position::new(x, y), Resource { resource_type, quantity });
+                    resources.insert(
+                        Position::new(x, y),
+                        Resource {
+                            resource_type,
+                            quantity,
+                        },
+                    );
                     break;
                 }
             }
@@ -138,13 +137,6 @@ impl Map {
         } else {
             CellType::Obstacle
         }
-    }
-
-    pub fn is_walkable(&self, pos: Position) -> bool {
-        matches!(
-            self.get_cell(pos),
-            CellType::Empty | CellType::Energy | CellType::Crystal
-        )
     }
 }
 

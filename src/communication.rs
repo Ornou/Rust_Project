@@ -35,29 +35,3 @@ impl Message {
         }
     }
 }
-
-pub struct MessageBroker {
-    pub messages: Vec<Message>,
-}
-
-impl MessageBroker {
-    pub fn new() -> Self {
-        MessageBroker {
-            messages: Vec::new(),
-        }
-    }
-
-    pub fn broadcast(&mut self, message: Message) {
-        self.messages.push(message);
-    }
-
-    pub fn clear(&mut self) {
-        self.messages.clear();
-    }
-}
-
-impl Default for MessageBroker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
