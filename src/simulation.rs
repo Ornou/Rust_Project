@@ -320,8 +320,7 @@ fn scan_resource_at(map: &Arc<Mutex<Map>>, pos: Position) -> Option<(ResourceTyp
         CellType::Energy | CellType::Crystal => m
             .resources
             .get(&pos)
-            .filter(|r| r.quantity > 0)
-            .map(|r| (r.resource_type, r.quantity)),
+            .and_then(|r| (r.quantity > 0).then_some((r.resource_type, r.quantity))),
         _ => None,
     }
 }
