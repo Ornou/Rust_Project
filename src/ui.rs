@@ -3,7 +3,7 @@ use crate::robot::RobotType;
 use crate::simulation::RenderSnapshot;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use std::collections::HashMap;
 
@@ -58,28 +58,62 @@ mod styles {
 }
 
 pub fn render(snapshot: &RenderSnapshot, frame: &mut Frame) {
+    let stats_height = stats_panel_height();
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
-        .constraints([Constraint::Min(0), Constraint::Length(5)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(stats_height),
+        ])
         .split(frame.size());
 
     draw_map(frame, snapshot, chunks[0]);
     draw_stats(frame, snapshot, chunks[1]);
 }
 
+/// Content lines plus block borders (title sits on the top border).
+fn stats_panel_height() -> u16 {
+    const STATS_LINES: u16 = 4;
+    const BLOCK_BORDERS: u16 = 2;
+    STATS_LINES + BLOCK_BORDERS
+}
+
+fn map_title(snap: &RenderSnapshot, visible_w: usize, visible_h: usize) -> String {
+    if visible_w < snap.map.width || visible_h < snap.map.height {
+        format!(
+            " Map [{visible_w}x{visible_h}/{}x{}] ",
+            snap.map.width, snap.map.height
+        )
+    } else {
+        " Map ".to_string()
+    }
+}
+
 fn draw_map(frame: &mut Frame, snap: &RenderSnapshot, area: Rect) {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let visible_w = inner.width as usize;
+    let visible_h = inner.height as usize;
+    let map_w = snap.map.width.min(visible_w);
+    let map_h = snap.map.height.min(visible_h);
+
+    let block = Block::default()
+        .title(map_title(snap, map_w, map_h))
+        .borders(Borders::ALL);
+
     let robot_map: HashMap<Position, RobotType> = snap
         .robot_positions
         .iter()
-        .map(|(_, pos, rt)| (*pos, *rt))
+        .filter_map(|(_, pos, rt)| {
+            (pos.x < map_w && pos.y < map_h).then_some((*pos, *rt))
+        })
         .collect();
 
-    let mut lines: Vec<Line> = Vec::new();
+    let mut lines: Vec<Line> = Vec::with_capacity(map_h);
 
-    for y in 0..snap.map.height {
-        let mut spans: Vec<Span> = Vec::new();
-        for x in 0..snap.map.width {
+    for y in 0..map_h {
+        let mut spans: Vec<Span> = Vec::with_capacity(map_w);
+        for x in 0..map_w {
             let pos = Position::new(x, y);
             let (ch, style) = if pos == snap.map.base_position {
                 ('#', styles::base())
@@ -101,9 +135,7 @@ fn draw_map(frame: &mut Frame, snap: &RenderSnapshot, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    let map_widget = Paragraph::new(lines)
-        .block(Block::default().title(" Map ").borders(Borders::ALL))
-        .wrap(Wrap { trim: true });
+    let map_widget = Paragraph::new(lines).block(block);
     frame.render_widget(map_widget, area);
 }
 
